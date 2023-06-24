@@ -57,23 +57,23 @@ pub trait LekServer {
     fn send_lek_msg(
         &mut self,
         client_id: ClientId,
-        message: impl ServerMessage,
+        message: impl ClientMessage,
     ) -> Result<(), QuinnetError>;
 }
 impl LekServer for Endpoint {
     fn send_lek_msg(
         &mut self,
         client_id: ClientId,
-        message: impl ServerMessage,
+        message: impl ClientMessage,
     ) -> Result<(), QuinnetError> {
         self.send_message_on(client_id, message.channel_id(), message.to_message())
     }
 }
 pub trait LekClient {
-    fn send_lek_msg(&mut self, message: impl ClientMessage) -> Result<(), QuinnetError>;
+    fn send_lek_msg(&mut self, message: impl ServerMessage) -> Result<(), QuinnetError>;
 }
 impl LekClient for Connection {
-    fn send_lek_msg(&mut self, message: impl ClientMessage) -> Result<(), QuinnetError> {
+    fn send_lek_msg(&mut self, message: impl ServerMessage) -> Result<(), QuinnetError> {
         self.send_message_on(message.channel_id(), message.to_message())
     }
 }
