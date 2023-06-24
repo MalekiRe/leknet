@@ -1,4 +1,7 @@
-use crate::{connect_to_server, start_server, ClientMessageMap, LeknetClient, LeknetServer, Message, ServerMessageMap, ClientMessage, ServerMessage, LekClient, TypeName};
+use crate::{
+    connect_to_server, start_server, ClientMessage, ClientMessageMap, LekClient, LeknetClient,
+    LeknetServer, Message, ServerMessage, ServerMessageMap, TypeName,
+};
 use bevy::MinimalPlugins;
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::{Commands, Component, ReflectComponent, ResMut, World};
@@ -7,13 +10,13 @@ use bevy_quinnet::client::connection::ConnectionConfiguration;
 use bevy_quinnet::client::{Client, QuinnetClientPlugin};
 use bevy_quinnet::server::certificate::CertificateRetrievalMode;
 use bevy_quinnet::server::{QuinnetServerPlugin, Server, ServerConfiguration};
+use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 use bevy_quinnet::shared::ClientId;
 use bevy_reflect::{Reflect, TypeUuidDynamic};
 use port_scanner::request_open_port;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::net::{SocketAddr, SocketAddrV4};
-use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum TestMessage {
@@ -33,13 +36,14 @@ impl ClientMessage for TestMessage {
     }
 
     fn _client(world: &mut World, msg_bytes: &[u8]) {
-        bincode::deserialize::<Self>(msg_bytes).unwrap().client(world)
+        bincode::deserialize::<Self>(msg_bytes)
+            .unwrap()
+            .client(world)
     }
 
     fn channel_type(&self) -> ChannelType {
         ChannelType::OrderedReliable
     }
-
 
     fn plugin(app: &mut App) {
         //add stuff you wanna setup this app with
@@ -52,13 +56,14 @@ impl ServerMessage for TestMessage {
     }
 
     fn _server(world: &mut World, msg_bytes: &[u8], client_id: ClientId) {
-        bincode::deserialize::<Self>(msg_bytes).unwrap().server(world, client_id)
+        bincode::deserialize::<Self>(msg_bytes)
+            .unwrap()
+            .server(world, client_id)
     }
 
     fn channel_type(&self) -> ChannelType {
         ChannelType::OrderedReliable
     }
-
 
     fn plugin(app: &mut App) {
         //add stuff you wanna setup this app with
@@ -96,13 +101,11 @@ static mut THING: bool = false;
 
 fn my_system(mut client: ResMut<Client>) {
     if let Some(connection_mut) = client.get_connection_mut() {
-        if unsafe { THING == false} {
+        if unsafe { THING == false } {
             unsafe {
                 THING = true;
             }
-                connection_mut
-                .send_lek_msg(TestMessage::Hi)
-                .unwrap();
+            connection_mut.send_lek_msg(TestMessage::Hi).unwrap();
         }
     }
 }

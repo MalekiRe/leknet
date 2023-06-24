@@ -1,11 +1,10 @@
 #[cfg(test)]
 mod test;
 
-use std::any::Any;
 use bevy_app::{App, Plugin};
 use bevy_ecs::entity::Entity;
 use bevy_ecs::event::{EventReader, EventWriter};
-use bevy_ecs::prelude::{ResMut, Resource, Component};
+use bevy_ecs::prelude::{Component, ResMut, Resource};
 use bevy_ecs::system::SystemState;
 use bevy_ecs::world::World;
 use bevy_quinnet::client::certificate::CertificateVerificationMode;
@@ -13,18 +12,21 @@ use bevy_quinnet::client::connection::{Connection, ConnectionConfiguration};
 use bevy_quinnet::client::Client;
 use bevy_quinnet::server::certificate::CertificateRetrievalMode;
 use bevy_quinnet::server::{ClientConnection, Endpoint, Server, ServerConfiguration};
+use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 use bevy_quinnet::shared::{ClientId, QuinnetError};
 use bevy_reflect::Reflect;
 use bimap::BiHashMap;
 use port_scanner::request_open_port;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::ops::{Deref, DerefMut};
-use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 
 #[derive(Resource)]
-pub struct ServerMessageMap(pub HashMap<String, Box<(dyn Fn(&mut World, &[u8], ClientId) + Sync + Send)>>);
+pub struct ServerMessageMap(
+    pub HashMap<String, Box<(dyn Fn(&mut World, &[u8], ClientId) + Sync + Send)>>,
+);
 #[derive(Resource)]
 pub struct ClientMessageMap(pub HashMap<String, Box<(dyn Fn(&mut World, &[u8]) + Sync + Send)>>);
 #[derive(Resource)]
@@ -52,11 +54,19 @@ impl DerefMut for EntityMap {
 }
 
 pub trait LekServer {
-    fn send_lek_msg(&mut self, client_id: ClientId, message: impl ServerMessage) -> Result<(), QuinnetError>;
+    fn send_lek_msg(
+        &mut self,
+        client_id: ClientId,
+        message: impl ServerMessage,
+    ) -> Result<(), QuinnetError>;
 }
 impl LekServer for Endpoint {
-    fn send_lek_msg(&mut self, client_id: ClientId, message: impl ServerMessage) -> Result<(), QuinnetError> {
-        self.send_message_on(client_id,  message.channel_id(), message.to_message())
+    fn send_lek_msg(
+        &mut self,
+        client_id: ClientId,
+        message: impl ServerMessage,
+    ) -> Result<(), QuinnetError> {
+        self.send_message_on(client_id, message.channel_id(), message.to_message())
     }
 }
 pub trait LekClient {
@@ -64,7 +74,7 @@ pub trait LekClient {
 }
 impl LekClient for Connection {
     fn send_lek_msg(&mut self, message: impl ClientMessage) -> Result<(), QuinnetError> {
-        self.send_message_on( message.channel_id(), message.to_message())
+        self.send_message_on(message.channel_id(), message.to_message())
     }
 }
 
@@ -91,10 +101,9 @@ pub trait ClientMessage: Any + serde::Serialize + TypeName {
         }
     }
     fn client_system(mut client_msg_map: ResMut<ClientMessageMap>) {
-        client_msg_map.0.insert(
-            Self::get_type_name(),
-            Box::new(Self::_client),
-        );
+        client_msg_map
+            .0
+            .insert(Self::get_type_name(), Box::new(Self::_client));
     }
     fn add_plugin_client(app: &mut App) {
         app.add_system(Self::client_system);
@@ -118,14 +127,13 @@ pub trait ServerMessage: Any + serde::Serialize + TypeName {
     fn to_message(&self) -> Message {
         Message {
             name: Self::get_type_name(),
-            data: bincode::serialize(self).unwrap()
+            data: bincode::serialize(self).unwrap(),
         }
     }
     fn server_system(mut server_msg_map: ResMut<ServerMessageMap>) {
-        server_msg_map.0.insert(
-            Self::get_type_name(),
-            Box::new(Self::_server),
-        );
+        server_msg_map
+            .0
+            .insert(Self::get_type_name(), Box::new(Self::_server));
     }
     fn add_plugin_server(app: &mut App) {
         app.add_system(Self::server_system);
@@ -170,7 +178,6 @@ struct ServerMsg(String, Vec<u8>, ClientId);
 /// message from the server to the client
 #[derive(Clone)]
 struct ClientMsg(String, Vec<u8>);
-
 
 fn server_msg(world: &mut World) {
     let mut system_state: SystemState<ResMut<Server>> = SystemState::new(world);
