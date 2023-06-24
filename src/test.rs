@@ -76,26 +76,27 @@ fn start() -> App {
     app
 }
 
-#[test]
-fn server() {
-    let mut app = start();
-    TestMessage::add_plugin_server(&mut app);
-    app.add_plugin(LeknetServer);
-    app.add_plugin(QuinnetServerPlugin::default());
-    app.add_startup_system(start_server);
-    app.run();
-}
-
-#[test]
-fn client() {
-    let mut app = start();
-    TestMessage::add_plugin_client(&mut app);
-    app.add_plugin(QuinnetClientPlugin::default());
-    app.add_plugin(LeknetClient);
-    app.add_startup_system(connect_to_server);
-    app.add_system(my_system);
-    app.run();
-}
+// tests are commented out because they rely on some minimal plugins being installed, but you don't need those plugins in order to work
+// #[test]
+// fn server() {
+//     let mut app = start();
+//     TestMessage::add_plugin_server(&mut app);
+//     app.add_plugin(LeknetServer);
+//     app.add_plugin(QuinnetServerPlugin::default());
+//     app.add_startup_system(start_server);
+//     app.run();
+// }
+//
+// #[test]
+// fn client() {
+//     let mut app = start();
+//     TestMessage::add_plugin_client(&mut app);
+//     app.add_plugin(QuinnetClientPlugin::default());
+//     app.add_plugin(LeknetClient);
+//     app.add_startup_system(connect_to_server);
+//     app.add_system(my_system);
+//     app.run();
+// }
 
 static mut THING: bool = false;
 

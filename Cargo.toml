@@ -12,6 +12,5 @@ bevy_reflect = "0.10.1"
 bevy_quinnet = "0.4.0"
 serde = { version = "1.0.164", features = ["derive"]}
 bincode = "1.3.3"
-bevy = "0.10.1"
 port_scanner = "0.1.5"
 bimap = "0.6.3"
