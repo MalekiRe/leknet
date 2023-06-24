@@ -106,7 +106,7 @@ pub trait ClientMessage: Any + serde::Serialize + TypeName {
             .insert(Self::get_type_name(), Box::new(Self::_client));
     }
     fn add_plugin_client(app: &mut App) {
-        app.add_system(Self::client_system);
+        app.add_startup_system(Self::client_system);
         Self::plugin(app);
     }
     #[deprecated]
@@ -136,7 +136,7 @@ pub trait ServerMessage: Any + serde::Serialize + TypeName {
             .insert(Self::get_type_name(), Box::new(Self::_server));
     }
     fn add_plugin_server(app: &mut App) {
-        app.add_system(Self::server_system);
+        app.add_startup_system(Self::server_system);
         Self::plugin(app);
     }
     #[deprecated]
@@ -150,7 +150,6 @@ impl Plugin for LeknetServer {
     fn build(&self, app: &mut App) {
         app.insert_resource(EntityMap(BiHashMap::new()));
         app.insert_resource(ServerMessageMap(HashMap::new()));
-        app.insert_resource(ClientMessageMap(HashMap::new()));
         app.add_system(server_msg);
         app.add_event::<ServerMsg>();
     }
@@ -160,7 +159,6 @@ impl Plugin for LeknetClient {
     fn build(&self, app: &mut App) {
         app.insert_resource(EntityMap(BiHashMap::new()));
         app.insert_resource(ClientMessageMap(HashMap::new()));
-        app.insert_resource(ServerMessageMap(HashMap::new()));
         app.add_system(client_msg);
         app.add_event::<ClientMsg>();
     }
@@ -180,6 +178,11 @@ struct ServerMsg(String, Vec<u8>, ClientId);
 struct ClientMsg(String, Vec<u8>);
 
 fn server_msg(world: &mut World) {
+    let mut system_state: SystemState<ResMut<ServerMessageMap>> =
+        SystemState::new(world);
+    if system_state.get_mut(world).0.keys().len() == 0 {
+        return;
+    }
     let mut system_state: SystemState<ResMut<Server>> = SystemState::new(world);
 
     let mut server: ResMut<Server> = system_state.get_mut(world);
@@ -213,6 +216,12 @@ fn server_msg(world: &mut World) {
 }
 
 fn client_msg(world: &mut World) {
+    let mut system_state: SystemState<ResMut<ClientMessageMap>> =
+        SystemState::new(world);
+    if system_state.get_mut(world).0.keys().len() == 0 {
+        return;
+    }
+
     let mut system_state: SystemState<ResMut<Client>> = SystemState::new(world);
 
     let mut client = system_state.get_mut(world);
@@ -232,7 +241,11 @@ fn client_msg(world: &mut World) {
                     SystemState::new(world);
                 let mut func = None;
                 {
-                    func.replace(system_state.get_mut(world).0.remove(&name).unwrap());
+                    func.replace(system_state
+                        .get_mut(world)
+                        .0
+                        .remove(&name)
+                        .unwrap());
                 }
                 let func = func.unwrap();
                 func(world, data.as_slice());
