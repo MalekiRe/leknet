@@ -13,7 +13,7 @@ use port_scanner::request_open_port;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::net::{SocketAddr, SocketAddrV4};
-use bevy_quinnet::shared::channel::ChannelId;
+use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum TestMessage {
@@ -36,9 +36,10 @@ impl ClientMessage for TestMessage {
         bincode::deserialize::<Self>(msg_bytes).unwrap().client(world)
     }
 
-    fn channel_id(&self) -> ChannelId {
-        ChannelId::OrderedReliable(1)
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::OrderedReliable
     }
+
 
     fn plugin(app: &mut App) {
         //add stuff you wanna setup this app with
@@ -54,9 +55,10 @@ impl ServerMessage for TestMessage {
         bincode::deserialize::<Self>(msg_bytes).unwrap().server(world, client_id)
     }
 
-    fn channel_id(&self) -> ChannelId {
-        ChannelId::OrderedReliable(1)
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::OrderedReliable
     }
+
 
     fn plugin(app: &mut App) {
         //add stuff you wanna setup this app with

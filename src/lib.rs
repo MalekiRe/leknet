@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::ops::{Deref, DerefMut};
-use bevy_quinnet::shared::channel::ChannelId;
+use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
 
 #[derive(Resource)]
 pub struct ServerMessageMap(pub HashMap<String, Box<(dyn Fn(&mut World, &[u8], ClientId) + Sync + Send)>>);
@@ -76,7 +76,14 @@ pub trait ClientMessage: Any + serde::Serialize + TypeName {
     fn client(self, world: &mut World);
     /// bincode::deserialize::<Self>(msg_bytes).unwrap().client(world)
     fn _client(world: &mut World, msg_bytes: &[u8]);
-    fn channel_id(&self) -> ChannelId;
+    fn channel_id(&self) -> ChannelId {
+        match self.channel_type() {
+            ChannelType::OrderedReliable => ChannelId::OrderedReliable(1),
+            ChannelType::UnorderedReliable => ChannelId::UnorderedReliable,
+            ChannelType::Unreliable => ChannelId::Unreliable,
+        }
+    }
+    fn channel_type(&self) -> ChannelType;
     fn to_message(&self) -> Message {
         Message {
             name: Self::get_type_name(),
@@ -100,7 +107,14 @@ pub trait ClientMessage: Any + serde::Serialize + TypeName {
 pub trait ServerMessage: Any + serde::Serialize + TypeName {
     fn server(self, world: &mut World, client_id: ClientId);
     fn _server(world: &mut World, msg_bytes: &[u8], client_id: ClientId);
-    fn channel_id(&self) -> ChannelId;
+    fn channel_id(&self) -> ChannelId {
+        match self.channel_type() {
+            ChannelType::OrderedReliable => ChannelId::OrderedReliable(1),
+            ChannelType::UnorderedReliable => ChannelId::UnorderedReliable,
+            ChannelType::Unreliable => ChannelId::Unreliable,
+        }
+    }
+    fn channel_type(&self) -> ChannelType;
     fn to_message(&self) -> Message {
         Message {
             name: Self::get_type_name(),
