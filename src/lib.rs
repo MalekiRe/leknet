@@ -1,288 +1,207 @@
 #[cfg(test)]
-mod test;
+mod test2;
 
-use bevy_app::{App, Plugin};
-use bevy_ecs::entity::Entity;
-use bevy_ecs::event::{EventReader, EventWriter};
-use bevy_ecs::prelude::{Component, ResMut, Resource};
-use bevy_ecs::system::SystemState;
-use bevy_ecs::world::World;
-use bevy_quinnet::client::certificate::CertificateVerificationMode;
-use bevy_quinnet::client::connection::{Connection, ConnectionConfiguration};
-use bevy_quinnet::client::Client;
-use bevy_quinnet::server::certificate::CertificateRetrievalMode;
-use bevy_quinnet::server::{ClientConnection, Endpoint, Server, ServerConfiguration};
-use bevy_quinnet::shared::channel::{ChannelId, ChannelType};
-use bevy_quinnet::shared::{ClientId, QuinnetError};
-use bevy_reflect::Reflect;
-use bimap::BiHashMap;
-use port_scanner::request_open_port;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::HashMap;
-use std::net::{SocketAddr, SocketAddrV4};
-use std::ops::{Deref, DerefMut};
+use std::marker::PhantomData;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Mutex};
+use bevy_ecs::prelude::{Res, ResMut};
+use bevy_ecs::system::SystemParam;
+use bevy_reflect::{TypePath};
+use serde::{Deserialize, Serialize};
+use bevy::prelude::Resource;
+use bevy_app::{App, Plugin};
+use bevy_renet::renet::{ChannelConfig, ConnectionConfig, DefaultChannel, RenetClient, RenetServer, SendType};
 
-#[derive(Resource)]
-pub struct ServerMessageMap(
-    pub HashMap<String, Box<(dyn Fn(&mut World, &[u8], ClientId) + Sync + Send)>>,
-);
-#[derive(Resource)]
-pub struct ClientMessageMap(pub HashMap<String, Box<(dyn Fn(&mut World, &[u8]) + Sync + Send)>>);
-#[derive(Resource)]
-pub struct EntityMap(pub BiHashMap<ClientEntity, ServerEntity>);
 
-#[derive(Component)]
-pub struct Networked;
+pub struct LeknetClientPlugin;
+pub struct LeknetServerPlugin;
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
-pub struct ClientEntity(pub Entity);
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
-pub struct ServerEntity(pub Entity);
-
-impl Deref for EntityMap {
-    type Target = BiHashMap<ClientEntity, ServerEntity>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+#[derive(SystemParam)]
+pub struct ClientChannelWriter<'w, T: Channel> {
+    client: ResMut<'w, RenetClient>,
+    channel_map: Res<'w, ChannelMap>,
+    phantom: PhantomData<T>,
 }
-impl DerefMut for EntityMap {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-pub trait LekServer {
-    fn send_lek_msg(
-        &mut self,
-        client_id: ClientId,
-        message: impl ClientMessage,
-    ) -> Result<(), QuinnetError>;
-}
-impl LekServer for Endpoint {
-    fn send_lek_msg(
-        &mut self,
-        client_id: ClientId,
-        message: impl ClientMessage,
-    ) -> Result<(), QuinnetError> {
-        self.send_message_on(client_id, message.channel_id(), message.to_message())
-    }
-}
-pub trait LekClient {
-    fn send_lek_msg(&mut self, message: impl ServerMessage) -> Result<(), QuinnetError>;
-}
-impl LekClient for Connection {
-    fn send_lek_msg(&mut self, message: impl ServerMessage) -> Result<(), QuinnetError> {
-        self.send_message_on(message.channel_id(), message.to_message())
+impl <'a, T: Channel> ClientChannelWriter<'a, T> {
+    pub fn send(&mut self, data: T, send_type: DefaultChannel) {
+        let ids = self.channel_map.get(T::short_type_path());
+        let channel_id = match send_type {
+            DefaultChannel::Unreliable => ids[0],
+            DefaultChannel::ReliableOrdered => ids[1],
+            DefaultChannel::ReliableUnordered => ids[2],
+        };
+        self.client.send_message(channel_id, bincode::serialize(&data).unwrap());
     }
 }
 
-pub trait TypeName {
-    fn get_type_name() -> String;
+#[derive(SystemParam)]
+pub struct ClientChannelReader<'w, T: Channel> {
+    rec_map: ResMut<'w, ReceiverMap>,
+    phantom_data: PhantomData<T>,
 }
-
-pub trait ClientMessage: Any + serde::Serialize + TypeName {
-    fn client(self, world: &mut World);
-    /// bincode::deserialize::<Self>(msg_bytes).unwrap().client(world)
-    fn _client(world: &mut World, msg_bytes: &[u8]);
-    fn channel_id(&self) -> ChannelId {
-        match self.channel_type() {
-            ChannelType::OrderedReliable => ChannelId::OrderedReliable(1),
-            ChannelType::UnorderedReliable => ChannelId::UnorderedReliable,
-            ChannelType::Unreliable => ChannelId::Unreliable,
+impl<'w, T: Channel> ClientChannelReader<'w, T> {
+    pub fn read(&mut self) -> Vec<T> {
+        let a = self.rec_map.rec_map.get(T::short_type_path()).unwrap();
+        let b = a.lock().unwrap();
+        let mut messages = vec![];
+        for msg in b.try_iter() {
+            messages.push(bincode::deserialize(&msg).unwrap());
         }
+        messages
     }
-    fn channel_type(&self) -> ChannelType;
-    fn to_message(&self) -> Message {
-        Message {
-            name: Self::get_type_name(),
-            data: bincode::serialize(self).unwrap(),
-        }
-    }
-    fn client_system(mut client_msg_map: ResMut<ClientMessageMap>) {
-        client_msg_map
-            .0
-            .insert(Self::get_type_name(), Box::new(Self::_client));
-    }
-    fn add_plugin_client(app: &mut App) {
-        app.add_startup_system(Self::client_system);
-        Self::plugin(app);
-    }
-    #[deprecated]
-    fn plugin(app: &mut App);
 }
 
-pub trait ServerMessage: Any + serde::Serialize + TypeName {
-    fn server(self, world: &mut World, client_id: ClientId);
-    fn _server(world: &mut World, msg_bytes: &[u8], client_id: ClientId);
-    fn channel_id(&self) -> ChannelId {
-        match self.channel_type() {
-            ChannelType::OrderedReliable => ChannelId::OrderedReliable(1),
-            ChannelType::UnorderedReliable => ChannelId::UnorderedReliable,
-            ChannelType::Unreliable => ChannelId::Unreliable,
-        }
+#[derive(SystemParam)]
+pub struct ServerChannelWriter<'w, T: Channel> {
+    server: ResMut<'w, RenetServer>,
+    channel_map: Res<'w, ChannelMap>,
+    phantom: PhantomData<T>,
+}
+impl <'a, T: Channel> ServerChannelWriter<'a, T> {
+    pub fn send(&mut self, data: T, send_type: DefaultChannel, client_id: u64) {
+        let ids = self.channel_map.get(T::short_type_path());
+        let channel_id = match send_type {
+            DefaultChannel::Unreliable => ids[0],
+            DefaultChannel::ReliableUnordered => ids[1],
+            DefaultChannel::ReliableOrdered => ids[2],
+        };
+        self.server.send_message(client_id, channel_id, bincode::serialize(&data).unwrap());
     }
-    fn channel_type(&self) -> ChannelType;
-    fn to_message(&self) -> Message {
-        Message {
-            name: Self::get_type_name(),
-            data: bincode::serialize(self).unwrap(),
-        }
+    pub fn clients_id(&self) -> Vec<u64> {
+        self.server.clients_id()
     }
-    fn server_system(mut server_msg_map: ResMut<ServerMessageMap>) {
-        server_msg_map
-            .0
-            .insert(Self::get_type_name(), Box::new(Self::_server));
-    }
-    fn add_plugin_server(app: &mut App) {
-        app.add_startup_system(Self::server_system);
-        Self::plugin(app);
-    }
-    #[deprecated]
-    fn plugin(app: &mut App);
 }
 
-pub struct LeknetServer;
-pub struct LeknetClient;
+#[derive(SystemParam)]
+pub struct ServerChannelReader<'w, T: Channel> {
+    rec_map: ResMut<'w, ReceiverMap>,
+    phantom_data: PhantomData<T>,
+}
+impl<'w, T: Channel> ServerChannelReader<'w, T> {
+    pub fn read(&mut self) -> Vec<T> {
+        let a = self.rec_map.rec_map.get(T::short_type_path()).unwrap();
+        let b = a.lock().unwrap();
+        let mut messages = vec![];
+        for msg in b.try_iter() {
+            messages.push(bincode::deserialize(&msg).unwrap());
+        }
+        messages
+    }
+}
 
-impl Plugin for LeknetServer {
+
+pub trait Channel: TypePath + std::fmt::Debug + Send + Sync + 'static + Serialize + for<'a> Deserialize<'a> {}
+
+#[derive(Resource, Default)]
+pub struct ChannelMap{
+    pub channel_map: HashMap<&'static str, [u8; 3]>,
+}
+#[derive(Resource, Default)]
+pub struct SenderMap {
+    pub send_map: HashMap<&'static str, Mutex<Sender<Vec<u8>>>>
+}
+#[derive(Resource, Default)]
+pub struct ReceiverMap {
+    pub rec_map: HashMap<&'static str, Mutex<Receiver<Vec<u8>>>>
+}
+impl ChannelMap {
+    pub fn add_channels(&mut self, name: &'static str) {
+        if self.channel_map.len() >= 255 {
+            panic!("too many channels added, max of 256");
+        }
+        let start = self.channel_map.len() as u8;
+        self.channel_map.insert(name, [start, start+1, start+2]);
+    }
+    pub fn get(&self, name: &'static str) -> [u8; 3] {
+        *self.channel_map.get(name).unwrap()
+    }
+}
+
+impl Plugin for LeknetClientPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(EntityMap(BiHashMap::new()));
-        app.insert_resource(ServerMessageMap(HashMap::new()));
-        app.add_system(server_msg);
-        app.add_event::<ServerMsg>();
+        app.insert_resource(ChannelMap::default());
+        app.insert_resource(SenderMap::default());
+        app.insert_resource(ReceiverMap::default());
+        app.insert_resource(RenetClient::new(ConnectionConfig::default()));
+        app.add_systems(bevy_app::Update, |channel_map: Res<ChannelMap>, mut client: ResMut<RenetClient>, send_map: ResMut<SenderMap>| {
+            let c = &channel_map.channel_map;
+            for (key, i) in c.iter() {
+                for i in i {
+                    if let Some(msg) = client.receive_message(*i) {
+                        send_map.send_map.get(key).unwrap().lock().unwrap().send(msg.to_vec()).unwrap();
+                    }
+                }
+            }
+        });
     }
 }
 
-impl Plugin for LeknetClient {
+impl Plugin for LeknetServerPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(EntityMap(BiHashMap::new()));
-        app.insert_resource(ClientMessageMap(HashMap::new()));
-        app.add_system(client_msg);
-        app.add_event::<ClientMsg>();
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Message {
-    name: String,
-    data: Vec<u8>,
-}
-
-/// message from the client to the server
-#[derive(Clone)]
-struct ServerMsg(String, Vec<u8>, ClientId);
-/// message from the server to the client
-#[derive(Clone)]
-struct ClientMsg(String, Vec<u8>);
-
-fn server_msg(world: &mut World) {
-    let mut system_state: SystemState<ResMut<ServerMessageMap>> =
-        SystemState::new(world);
-    if system_state.get_mut(world).0.keys().len() == 0 {
-        return;
-    }
-    let mut system_state: SystemState<ResMut<Server>> = SystemState::new(world);
-
-    let mut server: ResMut<Server> = system_state.get_mut(world);
-
-    let mut messages = Vec::new();
-    if let Some(endpoint) = server.get_endpoint_mut() {
-        for client_id in endpoint.clients() {
-            while let Some(message) =
-                endpoint.try_receive_message_from::<Message>(client_id.clone())
-            {
-                messages.push(ServerMsg(message.name, message.data, client_id.clone()));
-            }
-        }
-    }
-
-    for msg in messages {
-        match msg {
-            ServerMsg(name, data, client_id) => {
-                let mut system_state: SystemState<ResMut<ServerMessageMap>> =
-                    SystemState::new(world);
-                let mut func = None;
-                {
-                    func.replace(system_state.get_mut(world).0.remove(&name).unwrap());
+        app.insert_resource(ChannelMap::default());
+        app.insert_resource(SenderMap::default());
+        app.insert_resource(ReceiverMap::default());
+        app.insert_resource(RenetServer::new(ConnectionConfig::default()));
+        app.add_systems(bevy_app::Update, |channel_map: Res<ChannelMap>, mut server: ResMut<RenetServer>, send_map: ResMut<SenderMap>| {
+            let c = &channel_map.channel_map;
+            for (key, i) in c.iter() {
+                for i in i {
+                    for client in server.clients_id() {
+                        if let Some(msg) = server.receive_message(client, *i) {
+                            send_map.send_map.get(key).unwrap().lock().unwrap().send(msg.to_vec()).unwrap();
+                        }
+                    }
                 }
-                let func = func.unwrap();
-                func(world, data.as_slice(), client_id);
-                system_state.get_mut(world).0.insert(name, func);
             }
+        });
+    }
+}
+
+pub trait RegisterChannel {
+    fn register_channel<T: Channel>(&mut self, max_memory_usage_bytes: usize);
+}
+
+impl RegisterChannel for App {
+    fn register_channel<T: Channel>(&mut self, max_memory_usage_bytes: usize) {
+        let (tx, rx) = channel();
+        self.world.resource_mut::<ChannelMap>().add_channels(T::short_type_path());
+        self.world.resource_mut::<SenderMap>().send_map.insert(T::short_type_path(), Mutex::new(tx));
+        self.world.resource_mut::<ReceiverMap>().rec_map.insert(T::short_type_path(), Mutex::new(rx));
+        let len = self.world.resource_mut::<ChannelMap>().channel_map.len() as u8;
+        let mut channels_config = vec![];
+        let mut i = 0;
+        while i < len*3 {
+            channels_config.push(ChannelConfig {
+                channel_id: i,
+                max_memory_usage_bytes,
+                send_type: SendType::Unreliable,
+            });
+            channels_config.push(ChannelConfig {
+                channel_id: i+1,
+                max_memory_usage_bytes,
+                send_type: SendType::ReliableUnordered {
+                    resend_time: Default::default(),
+                },
+            });
+            channels_config.push(ChannelConfig {
+                channel_id: i+2,
+                max_memory_usage_bytes,
+                send_type: SendType::ReliableOrdered {
+                    resend_time: Default::default(),
+                },
+            });
+            i += 3;
         }
+        let connection_config = ConnectionConfig {
+            available_bytes_per_tick: 60_000,
+            server_channels_config: channels_config.clone(),
+            client_channels_config: channels_config,
+        };
+        if self.world.get_resource::<RenetClient>().is_some() {
+            self.insert_resource(RenetClient::new(connection_config))
+        } else {
+            self.insert_resource(RenetServer::new(connection_config))
+        };
     }
-}
-
-fn client_msg(world: &mut World) {
-    let mut system_state: SystemState<ResMut<ClientMessageMap>> =
-        SystemState::new(world);
-    if system_state.get_mut(world).0.keys().len() == 0 {
-        return;
-    }
-
-    let mut system_state: SystemState<ResMut<Client>> = SystemState::new(world);
-
-    let mut client = system_state.get_mut(world);
-
-    let mut messages = Vec::new();
-
-    for (_id, connection) in client.connections_mut() {
-        while let Some(message) = connection.try_receive_message::<Message>() {
-            messages.push(ClientMsg(message.name, message.data))
-        }
-    }
-
-    for msg in messages {
-        match msg {
-            ClientMsg(name, data) => {
-                let mut system_state: SystemState<ResMut<ClientMessageMap>> =
-                    SystemState::new(world);
-                let mut func = None;
-                {
-                    func.replace(system_state
-                        .get_mut(world)
-                        .0
-                        .remove(&name)
-                        .unwrap());
-                }
-                let func = func.unwrap();
-                func(world, data.as_slice());
-                system_state.get_mut(world).0.insert(name, func);
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub fn start_server(mut server: ResMut<Server>) {
-    server
-        .start_endpoint(
-            ServerConfiguration::from_addr(server_addr()),
-            CertificateRetrievalMode::GenerateSelfSigned {
-                server_hostname: "myserver".to_string(),
-            },
-        )
-        .unwrap();
-}
-
-#[allow(dead_code)]
-pub fn connect_to_server(mut client: ResMut<Client>) {
-    let port = request_open_port().expect("Unable to find an open port");
-    client
-        .open_connection(
-            ConnectionConfiguration::from_addrs(
-                server_addr(),
-                SocketAddr::V4(SocketAddrV4::new("0.0.0.0".parse().unwrap(), port)),
-            ),
-            CertificateVerificationMode::SkipVerification,
-        )
-        .unwrap();
-}
-
-pub const SERVER_ADDR: &'static str = "127.0.0.1:5000";
-
-pub fn server_addr() -> SocketAddr {
-    SERVER_ADDR.parse().unwrap()
 }
